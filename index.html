@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guitar Tone Advisor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0a;
+    color: #00ff88;
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid #0d2a0d;
+    background: #050f05;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .title { font-size: 14px; letter-spacing: 4px; color: #00ff88; text-transform: uppercase; }
+  .controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+
+  .app-nav { display: flex; gap: 4px; }
+  .app-link {
+    text-decoration: none; font-size: 10px; letter-spacing: 1px; color: #007733;
+    border: 1px solid #005522; border-radius: 2px; padding: 4px 8px; text-transform: uppercase;
+  }
+  .app-link:hover { color: #00cc55; border-color: #00aa44; background: #00ff8810; }
+  .app-link.active { color: #00ff88; border-color: #00ff88; background: #00ff8818; pointer-events: none; }
+
+  .ctrl-group { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #007733; letter-spacing: 1px; }
+  input[type=range] { -webkit-appearance: none; width: 80px; height: 3px; background: #0d2a0d; border-radius: 2px; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; background: #00ff88; border-radius: 50%; cursor: pointer; }
+  .meter-bar { width: 90px; height: 7px; background: #0a1a0a; border: 1px solid #0d2a0d; border-radius: 1px; overflow: hidden; }
+  .meter-fill { height: 100%; width: 0%; background: linear-gradient(to right, #00aa55, #00ff88, #aaff00, #ff4400); }
+
+  .btn {
+    background: transparent; border: 1px solid #00ff88; color: #00ff88;
+    padding: 6px 20px; font-family: 'Courier New', monospace; font-size: 12px;
+    letter-spacing: 2px; cursor: pointer; border-radius: 2px; text-transform: uppercase;
+  }
+  .btn:hover { background: #00ff8820; }
+  .btn.active { background: #00ff8830; border-color: #00ffaa; }
+  .status { font-size: 11px; letter-spacing: 2px; color: #004422; text-transform: uppercase; }
+  .status.on { color: #00ff88; }
+
+  #errorBanner {
+    display: none; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 10px 20px; background: #2a0d0d; border-bottom: 1px solid #551111;
+    color: #ff8866; font-size: 12px; letter-spacing: 1px;
+  }
+  #errorBanner.show { display: flex; }
+  #errorBanner b { color: #ffbb99; }
+  #errorBanner .dismiss {
+    background: transparent; border: 1px solid #aa4433; color: #ff8866;
+    font-family: 'Courier New', monospace; font-size: 11px; padding: 3px 12px;
+    border-radius: 2px; cursor: pointer; flex-shrink: 0;
+  }
+
+  main { flex: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+  .section-label { font-size: 10px; letter-spacing: 3px; color: #005522; text-transform: uppercase; margin-bottom: 8px; }
+
+  /* Target chooser */
+  .target-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip {
+    background: transparent; border: 1px solid #006633; color: #00cc66;
+    font-family: 'Courier New', monospace; font-size: 11px; letter-spacing: 1px;
+    padding: 6px 12px; border-radius: 2px; cursor: pointer; text-transform: uppercase;
+  }
+  .chip:hover { border-color: #00ff88; color: #00ff88; }
+  .chip.active { background: #00ff8820; border-color: #00ffaa; color: #00ffaa; }
+  .kw-form { display: flex; gap: 6px; flex: 1; min-width: 220px; }
+  .kw-form input {
+    flex: 1; background: #0a1a0a; border: 1px solid #0d2a0d; color: #00ff88;
+    font-family: 'Courier New', monospace; font-size: 12px; padding: 6px 10px;
+    border-radius: 2px; outline: none;
+  }
+  .kw-form input:focus { border-color: #00aa44; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { border: 1px solid #0d2a0d; border-radius: 3px; background: #050f05; padding: 14px 16px; }
+
+  /* Fingerprint bars */
+  .dim { margin-bottom: 13px; }
+  .dim-head { display: flex; justify-content: space-between; font-size: 11px; color: #008844; margin-bottom: 4px; letter-spacing: 1px; }
+  .dim-head .gap { font-size: 10px; }
+  .track {
+    position: relative; height: 14px; background: #0a1a0a;
+    border: 1px solid #0d2a0d; border-radius: 2px; overflow: visible;
+  }
+  .track .fill { position: absolute; top: 0; left: 0; bottom: 0; background: #00ff8830; border-right: 2px solid #00ff88; border-radius: 2px 0 0 2px; }
+  .track .target { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 2px dashed #ffaa00; }
+  .track .base { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dotted #00b4ff; }
+  .legend { font-size: 10px; color: #006622; margin-top: 4px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .legend span b { font-weight: normal; }
+  .legend .t-cur { color: #00ff88; } .legend .t-tgt { color: #ffaa00; } .legend .t-base { color: #00b4ff; }
+
+  #specCanvas { width: 100%; height: 120px; display: block; border: 1px solid #0d2a0d; border-radius: 2px; background: #050f05; margin-top: 10px; }
+
+  /* Suggestions */
+  .sug-status { font-size: 12px; color: #007733; margin-bottom: 10px; letter-spacing: 1px; }
+  .sug { border: 1px solid #0d2a0d; border-left: 3px solid #00aa55; border-radius: 2px; padding: 9px 12px; margin-bottom: 8px; background: #061206; }
+  .sug.up { border-left-color: #00ffaa; }
+  .sug.down { border-left-color: #ffaa00; }
+  .sug.tip { border-left-color: #00b4ff; }
+  .sug .st { font-size: 12px; color: #00dd88; letter-spacing: 1px; margin-bottom: 3px; }
+  .sug .sh { font-size: 12px; color: #8fbfa0; line-height: 1.6; }
+  .sug .badge { font-size: 9px; color: #004422; border: 1px solid #0d2a0d; border-radius: 2px; padding: 1px 5px; margin-left: 6px; vertical-align: middle; }
+
+  .snap-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+  footer { padding: 10px 20px; border-top: 1px solid #0d2a0d; background: #050f05; font-size: 11px; color: #005522; line-height: 1.7; letter-spacing: .5px; }
+  footer b { color: #008844; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">&#9632; Tone Advisor</div>
+  <div class="controls">
+    <div class="app-nav">
+      <a href="https://hgnj.github.io/visualizer/" class="app-link">🎚 Tuner</a>
+      <a href="https://hgnj.github.io/fretboard/" class="app-link">🎸 Fretboard</a>
+      <a href="https://hgnj.github.io/youtubookmark/" class="app-link">🔖 Bookmark</a>
+      <a href="https://hgnj.github.io/tone-advisor/" class="app-link active">🎛 Advisor</a>
+    </div>
+    <div class="ctrl-group">GAIN
+      <input type="range" id="gainSlider" min="1" max="12" value="4" step="0.1">
+      <span id="gainVal">4.0</span>
+    </div>
+    <div class="ctrl-group">LEVEL
+      <div class="meter-bar"><div class="meter-fill" id="meterFill"></div></div>
+    </div>
+    <div class="status" id="statusLabel">OFFLINE</div>
+    <button class="btn" id="startBtn" onclick="toggleAudio()">START</button>
+  </div>
+</header>
+
+<div id="errorBanner">
+  <div class="msg" id="errorMsg"></div>
+  <button class="dismiss" onclick="hideError()">✕ 閉じる</button>
+</div>
+
+<main>
+  <div>
+    <div class="section-label">① 目標トーン — プリセット or 自由記述</div>
+    <div class="target-row">
+      <div id="presetChips"></div>
+      <form class="kw-form" id="kwForm" onsubmit="return applyKeyword();">
+        <input type="text" id="kwInput" placeholder="例: もっとメタルに / 歌うソロ / カッティング軽やか / Herman Li風">
+        <button class="chip" type="submit">判定</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="section-label">② 今の音 vs 目標</div>
+      <div id="bars"></div>
+      <div class="legend">
+        <span class="t-cur">▌現在</span>
+        <span class="t-tgt">┊目標</span>
+        <span class="t-base">⋮基準(保存時)</span>
+      </div>
+      <canvas id="specCanvas"></canvas>
+      <div class="snap-row">
+        <button class="chip" id="snapBtn" onclick="saveBaseline()">📸 今の音を基準に保存</button>
+        <button class="chip" id="snapClr" onclick="clearBaseline()" style="display:none">基準クリア</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="section-label">③ 提案 — あなたのリグ向け（HX Stomp / ブースター / IR）</div>
+      <div class="sug-status" id="sugStatus">START を押してギターを弾いてください。</div>
+      <div id="sugList"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <b>使い方:</b> START → 目標を選ぶ/入力 → 数秒間しっかり弾く（リフでもソロでも）。鳴っている音を解析して、目標との差を具体的なツマミ操作に翻訳します。
+  <b>精度のコツ:</b> マイク/部屋/IRの色付けで絶対値はブレます。<b>まず今の音を「基準」に保存</b>し、ツマミを変えながら差分で追うと信頼度が上がります。提案は方向のヒント（"Midを上げる"等）であって絶対値ではありません。
+  解析は HX Stomp などを通した<b>処理後の音</b>（インターフェイス入力）を対象にすると精度が出ます。
+</footer>
+
+<script>
+let audioCtx, analyser, gainNode, source, stream;
+let animId = null, isRunning = false;
+let _timeBuf = null, _freqBuf = null;
+
+// ─── Spectral bands (Hz) ───
+const BANDS = [
+  { key: 'low',    lo: 60,   hi: 150 },
+  { key: 'lowmid', lo: 150,  hi: 400 },
+  { key: 'mid',    lo: 400,  hi: 900 },
+  { key: 'umid',   lo: 900,  hi: 2000 },
+  { key: 'pres',   lo: 2000, hi: 5000 },
+  { key: 'air',    lo: 5000, hi: 9000 },
+];
+const ANALYSIS_LO = 60, ANALYSIS_HI = 9000;
+
+// ─── Fingerprint dimensions (all 0..1) ───
+const DIMS = [
+  { key: 'LOW',     name: 'LOW 低域' },
+  { key: 'MID',     name: 'MID 中域(芯/抜け)' },
+  { key: 'HIGH',    name: 'HIGH 高域(食付き)' },
+  { key: 'BRIGHT',  name: 'BRIGHT 明るさ' },
+  { key: 'GRIT',    name: 'GRIT 歪み量' },
+  { key: 'SUSTAIN', name: 'SUSTAIN 伸び/圧縮' },
+];
+
+// ─── Target profiles ───
+// values 0..1 per dim; w = importance weight for ranking suggestions; tips always shown.
+const TARGETS = {
+  metal: {
+    label: 'メタル(リフ)',
+    v: { LOW: .36, MID: .27, HIGH: .37, BRIGHT: .62, GRIT: .85, SUSTAIN: .70 },
+    w: { LOW: 1.1, MID: .8,  HIGH: 1.0, BRIGHT: .7, GRIT: 1.2, SUSTAIN: .6 },
+    tips: ['Noise Gate を入れてリフの隙間（無音）を締める。', 'パームミュートは Low Cut とタイトな IR が効く。']
+  },
+  lead: {
+    label: '歌うリード',
+    v: { LOW: .30, MID: .46, HIGH: .24, BRIGHT: .50, GRIT: .62, SUSTAIN: .90 },
+    w: { LOW: .6, MID: 1.3, HIGH: .7, BRIGHT: .6, GRIT: .7, SUSTAIN: 1.2 },
+    tips: ['Delay(1/8 等)+Reverb を薄く足すと "歌う" 余韻が出る。', 'ブースターの Level で音量を前に出すと埋もれない。']
+  },
+  funk: {
+    label: '軽やかカッティング',
+    v: { LOW: .27, MID: .34, HIGH: .39, BRIGHT: .76, GRIT: .20, SUSTAIN: .25 },
+    w: { LOW: .8, MID: .7, HIGH: 1.0, BRIGHT: 1.0, GRIT: 1.1, SUSTAIN: 1.1 },
+    tips: ['コンプの Attack を速めて粒を揃える。', 'ピッキングの強弱を残すため Gain は控えめに。']
+  },
+  bright: {
+    label: 'ブライト・ハイゲイン(Herman Li系)',
+    v: { LOW: .30, MID: .27, HIGH: .43, BRIGHT: .84, GRIT: .82, SUSTAIN: .85 },
+    w: { LOW: .8, MID: .8, HIGH: 1.1, BRIGHT: 1.3, GRIT: 1.0, SUSTAIN: .8 },
+    tips: ['軽くスクープ＋Delay/Reverb で広がりと速弾きの分離を。', '低域はタイトに保つと高速フレーズが潰れない。']
+  },
+  clean: {
+    label: 'クリーン/クランチ',
+    v: { LOW: .32, MID: .38, HIGH: .30, BRIGHT: .60, GRIT: .32, SUSTAIN: .40 },
+    w: { LOW: .8, MID: .9, HIGH: .8, BRIGHT: .9, GRIT: 1.0, SUSTAIN: .8 },
+    tips: ['コンプ薄め＋Reverb でクリーンの艶を出す。', '歪ませたくない時はブースターを切るか Drive を最小に。']
+  },
+};
+const TARGET_ORDER = ['metal', 'lead', 'funk', 'bright', 'clean'];
+
+// keyword → target
+const KEYWORDS = [
+  { re: /(クリーン|clean|アルペジオ|きれい|綺麗)/i, t: 'clean' },
+  { re: /(カッティング|cutting|ファンク|funk|軽|キレ|歯切|cut)/i, t: 'funk' },
+  { re: /(明る|ブライト|bright|ハイゲイン|high.?gain|herman|haaman|dragonforce|ドラゴンフォース|速弾き|シュレッド|shred|きらび|キラ)/i, t: 'bright' },
+  { re: /(ソロ|リード|lead|歌|のび|伸び|sustain|サステ|目立|solo|singing|泣き)/i, t: 'lead' },
+  { re: /(メタル|めたる|metal|heavy|ヘヴ|ヘビ|重い|ザク|チャグ|chug|riff|リフ|激し|ジェント|djent)/i, t: 'metal' },
+];
+// intensity boosters exaggerate the target away from neutral 0.33/0.5
+const INTENS_RE = /(もっと|さらに|めちゃ|超|very|ガッツリ|強め|思いっきり|もっとも)/i;
+
+// ─── Suggestion text (per dim & direction) ───
+const SUG = {
+  LOW: {
+    up:   { t: '低域が軽い', h: 'Amp の Bass を上げる / Low Cut(HPF) の周波数を下げる / IR を低域の出るマイク位置に。' },
+    down: { t: '低域が重い・ボワつく', h: 'Low Cut(HPF) を 80–100Hz に設定 / Bass を下げる / ブースター前段で低域を削ってタイトに。' },
+  },
+  MID: {
+    up:   { t: '中域が薄い（芯・抜けが不足）', h: 'Mid を 800Hz–1.2kHz で持ち上げる / ブースターは TS 系（中域こぶ）で前段を押す。' },
+    down: { t: '中域が多い（こもる・箱鳴り）', h: 'Mid 400–600Hz を少し下げる / IR のマイクをエッジ寄り(オフアクシス)に。' },
+  },
+  HIGH: {
+    up:   { t: '高域・食い付きが不足', h: 'Presence を上げる / High Cut の周波数を上げる(7–9kHz) / アタックの出る IR に。' },
+    down: { t: '高域が出過ぎ（耳に痛い/フィズ）', h: 'High Cut を 6–7kHz に / Presence を下げる / オフアクシス IR でフィズを抑える。' },
+  },
+  BRIGHT: {
+    up:   { t: '音が暗い', h: 'Treble / Presence を上げる / High Cut を開く / 明るいキャビ・IR に変える。' },
+    down: { t: '音が硬い・煌びやか過ぎ', h: 'Treble を下げる / High Cut を下げて角を取る。' },
+  },
+  GRIT: {
+    up:   { t: '歪みが足りない', h: 'Amp Gain を上げる、または前段ブースターの Drive を上げる。EMG はホットなので上げ過ぎ注意 — まず Level で押す。' },
+    down: { t: '歪みが多すぎる（潰れ・濁り）', h: 'Gain を下げる / ブースターは Drive より Level で / よりタイトな IR でローを締める。' },
+  },
+  SUSTAIN: {
+    up:   { t: '伸び・サステインが不足', h: 'コンプ（サステイナー）を追加 / Gain を少し上げる / Delay+Reverb で余韻を補強。' },
+    down: { t: '圧縮され過ぎ（ダイナミクスが死ぬ）', h: 'コンプの Ratio を下げ Attack を速める / Gain を下げてピッキングの強弱を残す。' },
+  },
+};
+
+// ─── State ───
+let currentTargetKey = 'metal';
+let intensity = 1.0;            // 1.0 = preset as-is; >1 exaggerates (keyword "もっと")
+let baseline = null;           // saved fingerprint snapshot
+const _frames = [];            // rolling per-frame feature objects (when playing)
+const FRAME_WINDOW = 90;       // ~1.5 s at 60fps
+let _liveFP = null;            // latest computed fingerprint
+let _recompCounter = 0;
+
+const LS_KEY = 'toneAdvisorSettings';
+
+// ─── Audio lifecycle ───
+async function toggleAudio() { if (isRunning) stopAudio(); else await startAudio(); }
+
+async function startAudio() {
+  hideError();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showError('このブラウザ環境ではオーディオ入力を利用できません。<b>https</b> もしくは <b>localhost</b> 経由で開いてください。');
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 8192;
+    analyser.smoothingTimeConstant = 0.5;
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = parseFloat(document.getElementById('gainSlider').value);
+    source = audioCtx.createMediaStreamSource(stream);
+    source.connect(gainNode);
+    gainNode.connect(analyser);
+    _timeBuf = new Float32Array(analyser.fftSize);
+    _freqBuf = new Float32Array(analyser.frequencyBinCount);
+
+    document.getElementById('startBtn').textContent = 'STOP';
+    document.getElementById('startBtn').classList.add('active');
+    document.getElementById('statusLabel').textContent = 'LIVE';
+    document.getElementById('statusLabel').classList.add('on');
+    isRunning = true;
+    _frames.length = 0;
+    loop();
+  } catch (e) {
+    if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (_) {} }
+    if (audioCtx) { try { audioCtx.close(); } catch (_) {} }
+    stream = audioCtx = analyser = gainNode = source = null;
+    showError(describeMediaError(e));
+  }
+}
+
+function stopAudio() {
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  stream = audioCtx = analyser = gainNode = source = null;
+  _timeBuf = _freqBuf = null;
+  isRunning = false;
+  _frames.length = 0;
+  document.getElementById('startBtn').textContent = 'START';
+  document.getElementById('startBtn').classList.remove('active');
+  document.getElementById('statusLabel').textContent = 'OFFLINE';
+  document.getElementById('statusLabel').classList.remove('on');
+  document.getElementById('meterFill').style.width = '0%';
+  document.getElementById('sugStatus').textContent = 'START を押してギターを弾いてください。';
+}
+
+function describeMediaError(e) {
+  switch (e && e.name) {
+    case 'NotAllowedError': case 'PermissionDeniedError':
+      return 'マイク/オーディオ入力が<b>ブロックされています</b>。ブラウザのマイク許可を「許可」にして再試行してください。';
+    case 'NotFoundError': case 'DevicesNotFoundError':
+      return '入力デバイスが<b>見つかりません</b>。オーディオIF/マイクの接続を確認してください。';
+    case 'NotReadableError': case 'TrackStartError':
+      return '入力デバイスを<b>他のアプリが使用中</b>かもしれません（DAW等）。閉じてから再試行してください。';
+    case 'SecurityError':
+      return 'セキュリティ制約により入力を取得できません。<b>https</b> もしくは <b>localhost</b> 経由で開いてください。';
+    default:
+      return 'オーディオ入力を開始できませんでした。<b>' + ((e && e.name) || 'Error') + '</b>';
+  }
+}
+
+function showError(html) { document.getElementById('errorMsg').innerHTML = html; document.getElementById('errorBanner').classList.add('show'); }
+function hideError() { document.getElementById('errorBanner').classList.remove('show'); }
+
+// ─── Per-frame feature extraction ───
+function loop() {
+  if (!isRunning) return;
+  animId = requestAnimationFrame(loop);
+
+  analyser.getFloatTimeDomainData(_timeBuf);
+  analyser.getFloatFrequencyData(_freqBuf);
+
+  // level (RMS) + crest factor (dynamics / compression proxy)
+  let sumSq = 0, peak = 0;
+  for (let i = 0; i < _timeBuf.length; i++) {
+    const v = _timeBuf[i]; sumSq += v * v; const a = Math.abs(v); if (a > peak) peak = a;
+  }
+  const rms = Math.sqrt(sumSq / _timeBuf.length);
+  const dbRms = 20 * Math.log10(rms + 1e-10);
+  const pct = Math.max(0, Math.min(100, (dbRms + 60) / 60 * 100));
+  document.getElementById('meterFill').style.width = pct.toFixed(1) + '%';
+
+  drawSpectrum();
+
+  // Only collect features while actually playing
+  const playing = dbRms > -45;
+  if (playing) {
+    const f = extractFeatures(_freqBuf, peak, rms);
+    _frames.push(f);
+    if (_frames.length > FRAME_WINDOW) _frames.shift();
+  }
+
+  // Recompute fingerprint + suggestions a few times per second
+  if (++_recompCounter >= 18) {
+    _recompCounter = 0;
+    updateFingerprint();
+  }
+}
+
+function extractFeatures(freqData, peak, rms) {
+  const binHz = audioCtx.sampleRate / analyser.fftSize;
+  const band = {}; for (const b of BANDS) band[b.key] = 0;
+  let total = 0, centroidNum = 0;
+  let geoLogSum = 0, geoCount = 0, arithSum = 0;
+  const loBin = Math.max(1, Math.floor(ANALYSIS_LO / binHz));
+  const hiBin = Math.min(freqData.length - 1, Math.ceil(ANALYSIS_HI / binHz));
+  for (let i = loBin; i <= hiBin; i++) {
+    const f = i * binHz;
+    const p = Math.pow(10, freqData[i] / 10);  // dB → linear power
+    total += p; centroidNum += f * p;
+    arithSum += p; geoLogSum += Math.log(p + 1e-12); geoCount++;
+    for (const b of BANDS) { if (f >= b.lo && f < b.hi) { band[b.key] += p; break; } }
+  }
+  total = total || 1e-9;
+  const centroid = centroidNum / total;
+  const geoMean = Math.exp(geoLogSum / geoCount);
+  const arithMean = arithSum / geoCount;
+  const flatness = geoMean / (arithMean + 1e-12);  // 0(tonal)..1(noisy)
+  const crest = peak / (rms + 1e-9);
+  return { band, total, centroid, flatness, crest };
+}
+
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+// Average rolling frames → fingerprint (0..1 dims)
+function updateFingerprint() {
+  if (_frames.length < 8) {
+    document.getElementById('sugStatus').textContent = isRunning ? 'ギターを弾き続けてください…（解析中）' : '';
+    return;
+  }
+  const acc = {}; for (const b of BANDS) acc[b.key] = 0;
+  let cTot = 0, cCent = 0, cFlat = 0, cCrest = 0;
+  for (const f of _frames) {
+    for (const b of BANDS) acc[b.key] += f.band[b.key] / f.total;  // normalized share
+    cCent += f.centroid; cFlat += f.flatness; cCrest += f.crest; cTot++;
+  }
+  for (const b of BANDS) acc[b.key] /= cTot;
+  const centroid = cCent / cTot, flatness = cFlat / cTot, crest = cCrest / cTot;
+
+  const lowShare  = acc.low + acc.lowmid;
+  const midShare  = acc.mid + acc.umid;
+  const highShare = acc.pres + acc.air;
+  // brightness: log map 200Hz→0 .. 4kHz→1
+  const bright = clamp01(Math.log2((centroid || 200) / 200) / Math.log2(4000 / 200));
+  // grit: log map of spectral flatness
+  const grit = clamp01((Math.log10(flatness + 1e-6) + 4) / 3);
+  // sustain: lower crest = more compressed/sustained. crest 1.3→1 .. 4.0→0
+  const sustain = clamp01((4.0 - crest) / (4.0 - 1.3));
+
+  _liveFP = {
+    LOW: clamp01(lowShare), MID: clamp01(midShare), HIGH: clamp01(highShare),
+    BRIGHT: bright, GRIT: grit, SUSTAIN: sustain,
+  };
+  renderBars();
+  renderSuggestions();
+}
+
+// Target with intensity applied (exaggerate away from a neutral midpoint)
+function targetVec() {
+  const t = TARGETS[currentTargetKey];
+  if (intensity === 1.0) return t.v;
+  const NEUTRAL = { LOW: .33, MID: .33, HIGH: .33, BRIGHT: .5, GRIT: .5, SUSTAIN: .5 };
+  const out = {};
+  for (const d of DIMS) {
+    const k = d.key;
+    out[k] = clamp01(NEUTRAL[k] + (t.v[k] - NEUTRAL[k]) * intensity);
+  }
+  return out;
+}
+
+// ─── Rendering ───
+function renderBars() {
+  const tv = targetVec();
+  const el = document.getElementById('bars');
+  el.innerHTML = DIMS.map(d => {
+    const k = d.key;
+    const cur = _liveFP ? _liveFP[k] : 0;
+    const tgt = tv[k];
+    const gap = cur - tgt;
+    const aGap = Math.abs(gap);
+    const col = aGap < .07 ? '#00ffaa' : aGap < .15 ? '#ffaa00' : '#ff5500';
+    const gapTxt = aGap < .07 ? 'OK' : (gap > 0 ? '+' : '−') + Math.round(aGap * 100);
+    const baseMark = baseline ? '<div class="base" style="left:' + (baseline[k] * 100).toFixed(1) + '%"></div>' : '';
+    return '<div class="dim">'
+      + '<div class="dim-head"><span>' + d.name + '</span><span class="gap" style="color:' + col + '">' + gapTxt + '</span></div>'
+      + '<div class="track">'
+      +   '<div class="fill" style="width:' + (cur * 100).toFixed(1) + '%;border-right-color:' + col + ';background:' + col + '22"></div>'
+      +   '<div class="target" style="left:' + (tgt * 100).toFixed(1) + '%"></div>'
+      +   baseMark
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+function renderSuggestions() {
+  const status = document.getElementById('sugStatus');
+  const list = document.getElementById('sugList');
+  if (!_liveFP) { list.innerHTML = ''; return; }
+  const t = TARGETS[currentTargetKey];
+  const tv = targetVec();
+
+  const items = [];
+  for (const d of DIMS) {
+    const k = d.key;
+    const delta = tv[k] - _liveFP[k];           // + → need more
+    const mag = Math.abs(delta);
+    if (mag < 0.08) continue;
+    const dir = delta > 0 ? 'up' : 'down';
+    const s = SUG[k][dir];
+    items.push({ score: mag * (t.w[k] || 1), dir, title: s.t, how: s.h, pct: Math.round(mag * 100) });
+  }
+  items.sort((a, b) => b.score - a.score);
+  const top = items.slice(0, 4);
+
+  status.innerHTML = '目標: <b style="color:#00ffaa">' + t.label + '</b>'
+    + (intensity > 1 ? ' <span style="color:#ffaa00">(強め)</span>' : '')
+    + ' — ' + (top.length ? top.length + '件の改善ポイント' : 'ほぼ目標どおり ✓');
+
+  let html = top.map(it =>
+    '<div class="sug ' + it.dir + '"><div class="st">' + (it.dir === 'up' ? '▲ ' : '▼ ') + it.title
+    + '<span class="badge">差 ' + it.pct + '</span></div><div class="sh">' + it.how + '</div></div>'
+  ).join('');
+
+  if (!top.length) {
+    html = '<div class="sug up"><div class="st">✓ 目標に近い音です</div><div class="sh">大きなズレは見当たりません。微調整は基準を保存して差分で追ってください。</div></div>';
+  }
+  // Always-on target tips
+  html += (t.tips || []).map(tip =>
+    '<div class="sug tip"><div class="sh">💡 ' + tip + '</div></div>'
+  ).join('');
+  list.innerHTML = html;
+}
+
+// ─── Mini spectrum ───
+let _specDims = null;
+function sizeSpec() {
+  const c = document.getElementById('specCanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const r = c.getBoundingClientRect();
+  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  _specDims = { w: r.width, h: r.height, dpr };
+}
+function drawSpectrum() {
+  const c = document.getElementById('specCanvas');
+  if (!_specDims) sizeSpec();
+  const { w: W, h: H, dpr } = _specDims;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#050f05'; ctx.fillRect(0, 0, W, H);
+
+  const binHz = audioCtx.sampleRate / analyser.fftSize;
+  const fMin = 60, fMax = 9000;
+  const logMin = Math.log10(fMin), logMax = Math.log10(fMax);
+  const x2f = x => Math.pow(10, logMin + (x / W) * (logMax - logMin));
+  const f2x = f => (Math.log10(Math.max(f, fMin)) - logMin) / (logMax - logMin) * W;
+  const minDb = -100, maxDb = -10;
+  const y = db => ((maxDb - Math.max(minDb, Math.min(maxDb, db))) / (maxDb - minDb)) * H;
+
+  // band dividers
+  ctx.strokeStyle = '#0a200a'; ctx.lineWidth = 0.5; ctx.font = '8px Courier New'; ctx.fillStyle = '#0d350d';
+  [150, 400, 900, 2000, 5000].forEach(f => { const x = f2x(f); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); });
+
+  ctx.beginPath();
+  for (let x = 0; x < W; x++) {
+    const f0 = x2f(x), f1 = x2f(x + 1);
+    let b0 = Math.max(0, Math.floor(f0 / binHz)), b1 = Math.min(_freqBuf.length - 1, Math.ceil(f1 / binHz));
+    if (b1 < b0) b1 = b0;
+    let db = -Infinity; for (let b = b0; b <= b1; b++) if (_freqBuf[b] > db) db = _freqBuf[b];
+    const yy = y(db);
+    x === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+  }
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(0,255,136,0.45)'); grad.addColorStop(1, 'rgba(0,255,136,0.03)');
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath();
+  for (let x = 0; x < W; x++) {
+    const f0 = x2f(x), f1 = x2f(x + 1);
+    let b0 = Math.max(0, Math.floor(f0 / binHz)), b1 = Math.min(_freqBuf.length - 1, Math.ceil(f1 / binHz));
+    if (b1 < b0) b1 = b0;
+    let db = -Infinity; for (let b = b0; b <= b1; b++) if (_freqBuf[b] > db) db = _freqBuf[b];
+    const yy = y(db); x === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+  }
+  ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 1; ctx.stroke();
+}
+
+// ─── Target selection ───
+function setTarget(key, fromUser) {
+  currentTargetKey = key;
+  if (fromUser) intensity = 1.0;
+  document.querySelectorAll('#presetChips .chip').forEach(c => c.classList.toggle('active', c.dataset.key === key));
+  if (_liveFP) { renderBars(); renderSuggestions(); }
+  saveSettings();
+}
+
+function applyKeyword() {
+  const txt = document.getElementById('kwInput').value;
+  if (!txt.trim()) return false;
+  let matched = null;
+  for (const k of KEYWORDS) { if (k.re.test(txt)) { matched = k.t; break; } }
+  if (!matched) {
+    document.getElementById('sugStatus').textContent = 'キーワードを判定できませんでした。プリセットを選ぶか、メタル/ソロ/カッティング/明るい 等の語を含めてください。';
+    return false;
+  }
+  intensity = INTENS_RE.test(txt) ? 1.35 : 1.0;
+  setTarget(matched, false);
+  document.querySelectorAll('#presetChips .chip').forEach(c => c.classList.toggle('active', c.dataset.key === matched));
+  return false;
+}
+
+// ─── Baseline snapshot ───
+function saveBaseline() {
+  if (!_liveFP) { document.getElementById('sugStatus').textContent = 'まず弾いて解析させてから保存してください。'; return; }
+  baseline = Object.assign({}, _liveFP);
+  document.getElementById('snapClr').style.display = '';
+  renderBars();
+}
+function clearBaseline() {
+  baseline = null;
+  document.getElementById('snapClr').style.display = 'none';
+  renderBars();
+}
+
+// ─── Settings ───
+function saveSettings() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      gain: parseFloat(document.getElementById('gainSlider').value),
+      target: currentTargetKey,
+    }));
+  } catch (e) {}
+}
+function loadSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) {}
+  if (typeof s.gain === 'number') {
+    document.getElementById('gainSlider').value = s.gain;
+    document.getElementById('gainVal').textContent = s.gain.toFixed(1);
+  }
+  if (s.target && TARGETS[s.target]) currentTargetKey = s.target;
+}
+
+// ─── Init ───
+(function () {
+  // build preset chips
+  const wrap = document.getElementById('presetChips');
+  wrap.style.display = 'flex'; wrap.style.flexWrap = 'wrap'; wrap.style.gap = '8px';
+  TARGET_ORDER.forEach(key => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.dataset.key = key; b.textContent = TARGETS[key].label;
+    b.onclick = () => setTarget(key, true);
+    wrap.appendChild(b);
+  });
+
+  loadSettings();
+  document.querySelectorAll('#presetChips .chip').forEach(c => c.classList.toggle('active', c.dataset.key === currentTargetKey));
+
+  document.getElementById('gainSlider').addEventListener('input', function () {
+    document.getElementById('gainVal').textContent = parseFloat(this.value).toFixed(1);
+    if (gainNode) gainNode.gain.value = parseFloat(this.value);
+    saveSettings();
+  });
+
+  renderBars();  // show target markers before any input
+
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => sizeSpec()).observe(document.getElementById('specCanvas'));
+  window.addEventListener('resize', sizeSpec);
+  sizeSpec();
+
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.code === 'Space') { e.preventDefault(); toggleAudio(); }
+  });
+})();
+</script>
+</body>
+</html>
