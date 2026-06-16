@@ -202,89 +202,151 @@ let _timeBuf = null, _freqBuf = null;
 
 // ─── Spectral bands (Hz) ───
 const BANDS = [
-  { key: 'low',    lo: 60,   hi: 150 },
-  { key: 'lowmid', lo: 150,  hi: 400 },
-  { key: 'mid',    lo: 400,  hi: 900 },
-  { key: 'umid',   lo: 900,  hi: 2000 },
-  { key: 'pres',   lo: 2000, hi: 5000 },
-  { key: 'air',    lo: 5000, hi: 9000 },
+  { key: 'sub',   lo: 60,   hi: 95 },    // 低域ブーム（TIGHT 用）
+  { key: 'punch', lo: 95,   hi: 160 },   // 低域パンチ（TIGHT 用）
+  { key: 'body',  lo: 160,  hi: 400 },   // 中低域・太さ
+  { key: 'mid',   lo: 400,  hi: 2000 },  // 中域・芯/抜け
+  { key: 'pres',  lo: 2000, hi: 5000 },  // プレゼンス・食付き
+  { key: 'air',   lo: 5000, hi: 9000 },  // 空気感・フィズ
 ];
 const ANALYSIS_LO = 60, ANALYSIS_HI = 9000;
 
 // ─── Fingerprint dimensions (all 0..1) ───
 const DIMS = [
-  { key: 'LOW',     name: 'LOW 低域' },
-  { key: 'MID',     name: 'MID 中域(芯/抜け)' },
-  { key: 'HIGH',    name: 'HIGH 高域(食付き)' },
-  { key: 'BRIGHT',  name: 'BRIGHT 明るさ' },
+  { key: 'LOW',     name: 'LOW 低域(60–160)' },
+  { key: 'BODY',    name: 'BODY 中低域・太さ(160–400)' },
+  { key: 'MID',     name: 'MID 中域・芯/抜け(400–2k)' },
+  { key: 'PRES',    name: 'PRES プレゼンス・食付き(2–5k)' },
+  { key: 'AIR',     name: 'AIR 空気感/フィズ(5–9k)' },
+  { key: 'TIGHT',   name: 'TIGHT 低域の締まり' },
   { key: 'GRIT',    name: 'GRIT 歪み量' },
   { key: 'SUSTAIN', name: 'SUSTAIN 伸び/圧縮' },
 ];
 
 // ─── Target profiles ───
 // values 0..1 per dim; w = importance weight for ranking suggestions; tips always shown.
+// v: 目標(0..1) over DIMS。band系(LOW/BODY/MID/PRES/AIR)は概ね合計≒1のバランス。
+// emph: 重視する軸（提案ランキングで重み1.4倍）。tips: 常時表示の定石。
 const TARGETS = {
-  metal: {
+  metal_rhythm: {
     label: 'メタル(リフ)',
-    v: { LOW: .36, MID: .27, HIGH: .37, BRIGHT: .62, GRIT: .85, SUSTAIN: .70 },
-    w: { LOW: 1.1, MID: .8,  HIGH: 1.0, BRIGHT: .7, GRIT: 1.2, SUSTAIN: .6 },
+    v: { LOW: .20, BODY: .24, MID: .28, PRES: .22, AIR: .06, TIGHT: .80, GRIT: .85, SUSTAIN: .70 },
+    emph: ['TIGHT', 'GRIT', 'PRES'],
     tips: ['Noise Gate を入れてリフの隙間（無音）を締める。', 'パームミュートは Low Cut とタイトな IR が効く。']
   },
-  lead: {
-    label: '歌うリード',
-    v: { LOW: .30, MID: .46, HIGH: .24, BRIGHT: .50, GRIT: .62, SUSTAIN: .90 },
-    w: { LOW: .6, MID: 1.3, HIGH: .7, BRIGHT: .6, GRIT: .7, SUSTAIN: 1.2 },
-    tips: ['Delay(1/8 等)+Reverb を薄く足すと "歌う" 余韻が出る。', 'ブースターの Level で音量を前に出すと埋もれない。']
+  metal_lead: {
+    label: 'メタル(リード/ソロ)',
+    v: { LOW: .18, BODY: .26, MID: .36, PRES: .16, AIR: .04, TIGHT: .72, GRIT: .82, SUSTAIN: .90 },
+    emph: ['MID', 'SUSTAIN', 'GRIT'],
+    tips: ['Mid を持ち上げると埋もれず "歌う"。', 'Delay+Reverb でソロの余韻と空間を。']
+  },
+  djent: {
+    label: 'Djent/モダン',
+    v: { LOW: .18, BODY: .20, MID: .26, PRES: .28, AIR: .08, TIGHT: .88, GRIT: .90, SUSTAIN: .72 },
+    emph: ['TIGHT', 'GRIT', 'PRES'],
+    tips: ['Low Cut を高め(90–110Hz)＋強い Noise Gate でジェントの粒立ちを。', '低域はタイトに、刻みは Presence で前に。']
+  },
+  hardrock: {
+    label: 'ハードロック',
+    v: { LOW: .20, BODY: .28, MID: .36, PRES: .13, AIR: .03, TIGHT: .60, GRIT: .60, SUSTAIN: .55 },
+    emph: ['MID', 'GRIT'],
+    tips: ['Marshall系の中域を活かす。Gain は上げ過ぎずクランチ寄りに。', 'ピッキングのダイナミクスを残すと "ロック" の躍動感。']
+  },
+  classic: {
+    label: 'クラシック/ヴィンテージ',
+    v: { LOW: .22, BODY: .30, MID: .35, PRES: .10, AIR: .03, TIGHT: .50, GRIT: .45, SUSTAIN: .50 },
+    emph: ['BODY', 'MID'],
+    tips: ['低〜中域の太さが肝。Gain控えめ＋スプリングReverb。', 'High Cut で角を取りヴィンテージの丸みを。']
+  },
+  blues: {
+    label: 'ブルース(粘り/枯れ)',
+    v: { LOW: .22, BODY: .30, MID: .34, PRES: .11, AIR: .03, TIGHT: .50, GRIT: .45, SUSTAIN: .70 },
+    emph: ['MID', 'BODY', 'SUSTAIN'],
+    tips: ['軽いブレイクアップ＋強弱で表情を。Gainは指で操る程度に。', 'Mid を太く、Presenceは控えめにして枯れた質感。']
+  },
+  lead_sing: {
+    label: '歌うリード(汎用)',
+    v: { LOW: .18, BODY: .26, MID: .38, PRES: .14, AIR: .04, TIGHT: .65, GRIT: .60, SUSTAIN: .92 },
+    emph: ['MID', 'SUSTAIN'],
+    tips: ['Mid 800Hz–1.2kHz を軸に。コンプでサステイン。', 'Delay(1/8等)+Reverb を薄く足すと "歌う"。']
+  },
+  shred: {
+    label: '速弾き/ブライトHG(Herman Li系)',
+    v: { LOW: .17, BODY: .20, MID: .28, PRES: .27, AIR: .08, TIGHT: .80, GRIT: .82, SUSTAIN: .85 },
+    emph: ['PRES', 'AIR', 'TIGHT'],
+    tips: ['明るく・軽くスクープ＋Delay/Reverbで速弾きの分離と広がりを。', '低域をタイトに保つと高速フレーズが潰れない。']
   },
   funk: {
-    label: '軽やかカッティング',
-    v: { LOW: .27, MID: .34, HIGH: .39, BRIGHT: .76, GRIT: .20, SUSTAIN: .25 },
-    w: { LOW: .8, MID: .7, HIGH: 1.0, BRIGHT: 1.0, GRIT: 1.1, SUSTAIN: 1.1 },
-    tips: ['コンプの Attack を速めて粒を揃える。', 'ピッキングの強弱を残すため Gain は控えめに。']
-  },
-  bright: {
-    label: 'ブライト・ハイゲイン(Herman Li系)',
-    v: { LOW: .30, MID: .27, HIGH: .43, BRIGHT: .84, GRIT: .82, SUSTAIN: .85 },
-    w: { LOW: .8, MID: .8, HIGH: 1.1, BRIGHT: 1.3, GRIT: 1.0, SUSTAIN: .8 },
-    tips: ['軽くスクープ＋Delay/Reverb で広がりと速弾きの分離を。', '低域はタイトに保つと高速フレーズが潰れない。']
+    label: 'ファンク・カッティング',
+    v: { LOW: .18, BODY: .22, MID: .30, PRES: .22, AIR: .08, TIGHT: .78, GRIT: .15, SUSTAIN: .30 },
+    emph: ['GRIT', 'PRES', 'SUSTAIN'],
+    tips: ['コンプの Attack を速めて粒を揃える。', '低域を締め、Treble/Presenceで歯切れよく。']
   },
   clean: {
-    label: 'クリーン/クランチ',
-    v: { LOW: .32, MID: .38, HIGH: .30, BRIGHT: .60, GRIT: .32, SUSTAIN: .40 },
-    w: { LOW: .8, MID: .9, HIGH: .8, BRIGHT: .9, GRIT: 1.0, SUSTAIN: .8 },
-    tips: ['コンプ薄め＋Reverb でクリーンの艶を出す。', '歪ませたくない時はブースターを切るか Drive を最小に。']
+    label: 'クリーン(コード/アルペジオ)',
+    v: { LOW: .22, BODY: .28, MID: .28, PRES: .16, AIR: .06, TIGHT: .60, GRIT: .12, SUSTAIN: .45 },
+    emph: ['GRIT', 'AIR'],
+    tips: ['コンプ薄め＋Reverb/Chorusでクリーンの艶を。', '歪ませたくない時はブースターを切るか Drive 最小に。']
+  },
+  jazz: {
+    label: 'ジャズ(暖かい/フロント)',
+    v: { LOW: .24, BODY: .34, MID: .34, PRES: .06, AIR: .02, TIGHT: .45, GRIT: .15, SUSTAIN: .55 },
+    emph: ['BODY', 'AIR'],
+    tips: ['フロントPU＋Tone絞り気味、High Cut低めで丸く太く。', 'Reverb薄め、歪みはほぼ無しでまろやかに。']
+  },
+  country: {
+    label: 'カントリー(トゥワング)',
+    v: { LOW: .18, BODY: .22, MID: .30, PRES: .22, AIR: .08, TIGHT: .80, GRIT: .25, SUSTAIN: .30 },
+    emph: ['PRES', 'AIR', 'TIGHT'],
+    tips: ['リアPU＋ブライト、コンプで粒立ちとスナップを。', 'Slapback Delay でトゥワング感を強調。']
   },
 };
-const TARGET_ORDER = ['metal', 'lead', 'funk', 'bright', 'clean'];
+const TARGET_ORDER = ['metal_rhythm', 'metal_lead', 'djent', 'shred', 'hardrock', 'classic', 'blues', 'lead_sing', 'funk', 'clean', 'jazz', 'country'];
 
-// keyword → target
+// keyword → target（上から評価。具体的・固有名を先に、汎用を後に）
 const KEYWORDS = [
-  { re: /(クリーン|clean|アルペジオ|きれい|綺麗)/i, t: 'clean' },
-  { re: /(カッティング|cutting|ファンク|funk|軽|キレ|歯切|cut)/i, t: 'funk' },
-  { re: /(明る|ブライト|bright|ハイゲイン|high.?gain|herman|haaman|dragonforce|ドラゴンフォース|速弾き|シュレッド|shred|きらび|キラ)/i, t: 'bright' },
-  { re: /(ソロ|リード|lead|歌|のび|伸び|sustain|サステ|目立|solo|singing|泣き)/i, t: 'lead' },
-  { re: /(メタル|めたる|metal|heavy|ヘヴ|ヘビ|重い|ザク|チャグ|chug|riff|リフ|激し|ジェント|djent)/i, t: 'metal' },
+  { re: /(djent|ジェント|モダンメタル|periphery|meshuggah|メシュガ|polyphia|ポリフィア|8弦|7弦|多弦|タイト.?ハイゲイン)/i, t: 'djent' },
+  { re: /(herman|haaman|dragonforce|ドラゴンフォース|速弾き|シュレッド|shred|petrucci|ペトルー|satriani|サトリアー|steve ?vai|ヴァイ|malmsteen|マルムスティーン|gilbert|超高速|きらび|キラキラした?リード)/i, t: 'shred' },
+  { re: /(メタル.?(ソロ|リード)|metal.?(lead|solo))/i, t: 'metal_lead' },
+  { re: /(メタル|めたる|metal|heavy|ヘヴ|ヘビ|重い|ザク|チャグ|chug|riff|リフ|バッキング|激し|ダウンチューニング|デス|スラッシュ)/i, t: 'metal_rhythm' },
+  { re: /(ブルース|blues|枯れ|粘|泣き|srv|クラプトン|clapton|gary ?moore|bb ?king|ゲイリー)/i, t: 'blues' },
+  { re: /(ハードロック|hard.?rock|クランチ|crunch|ac.?dc|guns|ガンズ|vanhalen|ヴァンヘイレン)/i, t: 'hardrock' },
+  { re: /(クラシックロック|classic.?rock|ヴィンテージ|ビンテージ|vintage|マーシャル|marshall|zeppelin|ツェッペリン|60年代|70年代)/i, t: 'classic' },
+  { re: /(ジャズ|jazz|暖か|温か|まろやか|メロウ|mellow|wes|metheny|メセニー|フロント.?ピックアップ|甘い)/i, t: 'jazz' },
+  { re: /(カントリー|country|トゥワング|twang|チキンピッキング|chicken|テレキャス)/i, t: 'country' },
+  { re: /(カッティング|cutting|ファンク|funk|軽|キレ|歯切|cut|nile rodgers|john ?mayer)/i, t: 'funk' },
+  { re: /(クリーン|clean|アルペジオ|コード弾き|きれい|綺麗|キラキラ|シマー|shimmer|爽やか)/i, t: 'clean' },
+  { re: /(ソロ|リード|lead|歌|のび|伸び|sustain|サステ|目立|solo|singing|メロ|エモ|emotional)/i, t: 'lead_sing' },
+  { re: /(明る|ブライト|bright|ハイゲイン|high.?gain)/i, t: 'shred' },   // 汎用フォールバック
 ];
-// intensity boosters exaggerate the target away from neutral 0.33/0.5
-const INTENS_RE = /(もっと|さらに|めちゃ|超|very|ガッツリ|強め|思いっきり|もっとも)/i;
+// intensity boosters exaggerate the target away from its neutral baseline
+const INTENS_RE = /(もっと|さらに|めちゃ|超|very|ガッツリ|強め|思いっきり|もっとも|極端|バキバキ)/i;
 
 // ─── Suggestion text (per dim & direction) ───
 const SUG = {
   LOW: {
-    up:   { t: '低域が軽い', h: 'Amp の Bass を上げる / Low Cut(HPF) の周波数を下げる / IR を低域の出るマイク位置に。' },
-    down: { t: '低域が重い・ボワつく', h: 'Low Cut(HPF) を 80–100Hz に設定 / Bass を下げる / ブースター前段で低域を削ってタイトに。' },
+    up:   { t: '低域が薄い', h: 'Amp の Bass を上げる / Low Cut(HPF) の周波数を下げる / IR を低域の出るマイク位置に。' },
+    down: { t: '低域が多い', h: 'Bass を下げる / Low Cut(HPF) を 80–100Hz に設定 / ブースター前段で低域を削る。' },
+  },
+  BODY: {
+    up:   { t: '線が細い・薄い（中低域不足）', h: '200–350Hz を少し足して太さを出す / Mid の下側・Bass を補強 / 近接効果の出る IR に。' },
+    down: { t: '濁る・ボワつく（箱鳴り/中低域過多）', h: '200–300Hz を削る / IR のマイクをオフアクシス寄りに / Low Cut を少し上げる。' },
   },
   MID: {
-    up:   { t: '中域が薄い（芯・抜けが不足）', h: 'Mid を 800Hz–1.2kHz で持ち上げる / ブースターは TS 系（中域こぶ）で前段を押す。' },
-    down: { t: '中域が多い（こもる・箱鳴り）', h: 'Mid 400–600Hz を少し下げる / IR のマイクをエッジ寄り(オフアクシス)に。' },
+    up:   { t: '中域が薄い（抜け・芯が不足、埋もれる）', h: 'Mid を 800Hz–1.2kHz で持ち上げる / TS 系ブースター（中域こぶ）で前段を押す。' },
+    down: { t: '中域が前に出過ぎ（ホンキー/箱っぽい）', h: 'Mid 600–900Hz を少し下げる / 軽くスクープして抜けを整える。' },
   },
-  HIGH: {
-    up:   { t: '高域・食い付きが不足', h: 'Presence を上げる / High Cut の周波数を上げる(7–9kHz) / アタックの出る IR に。' },
-    down: { t: '高域が出過ぎ（耳に痛い/フィズ）', h: 'High Cut を 6–7kHz に / Presence を下げる / オフアクシス IR でフィズを抑える。' },
+  PRES: {
+    up:   { t: 'アタック・食い付きが不足', h: 'Presence を上げる / 2–4kHz を少しブースト / アタックの立つ IR(オンアクシス)に。' },
+    down: { t: '耳に刺さる・荒い（プレゼンス過多）', h: 'Presence を下げる / 3–4kHz を抑える / 少しオフアクシスの IR に。' },
   },
-  BRIGHT: {
-    up:   { t: '音が暗い', h: 'Treble / Presence を上げる / High Cut を開く / 明るいキャビ・IR に変える。' },
-    down: { t: '音が硬い・煌びやか過ぎ', h: 'Treble を下げる / High Cut を下げて角を取る。' },
+  AIR: {
+    up:   { t: '上が詰まっている（モコモコ）', h: 'High Cut の周波数を上げる(7–9kHz) / 明るい IR・キャビに変える。' },
+    down: { t: 'フィズ・シャリつき（高域ノイズ）', h: 'High Cut を 6–7kHz に下げる / オフアクシス IR でフィズを低減 / Gain を少し下げる。' },
+  },
+  TIGHT: {
+    up:   { t: '低域がブーミー・緩い', h: 'Low Cut(HPF) で 60–90Hz の膨らみを削る / タイトな IR / ブースター前段でローを整理。' },
+    down: { t: '低域が硬い・痩せ気味', h: 'Low Cut の周波数を下げて膨らみを少し戻す / Bass を気持ち上げる。' },
   },
   GRIT: {
     up:   { t: '歪みが足りない', h: 'Amp Gain を上げる、または前段ブースターの Drive を上げる。EMG はホットなので上げ過ぎ注意 — まず Level で押す。' },
@@ -297,7 +359,7 @@ const SUG = {
 };
 
 // ─── State ───
-let currentTargetKey = 'metal';
+let currentTargetKey = 'metal_rhythm';
 let intensity = 1.0;            // 1.0 = preset as-is; >1 exaggerates (keyword "もっと")
 let baseline = null;           // saved fingerprint snapshot
 const _frames = [];            // rolling per-frame feature objects (when playing)
@@ -420,24 +482,23 @@ function loop() {
 function extractFeatures(freqData, peak, rms) {
   const binHz = audioCtx.sampleRate / analyser.fftSize;
   const band = {}; for (const b of BANDS) band[b.key] = 0;
-  let total = 0, centroidNum = 0;
+  let total = 0;
   let geoLogSum = 0, geoCount = 0, arithSum = 0;
   const loBin = Math.max(1, Math.floor(ANALYSIS_LO / binHz));
   const hiBin = Math.min(freqData.length - 1, Math.ceil(ANALYSIS_HI / binHz));
   for (let i = loBin; i <= hiBin; i++) {
     const f = i * binHz;
     const p = Math.pow(10, freqData[i] / 10);  // dB → linear power
-    total += p; centroidNum += f * p;
+    total += p;
     arithSum += p; geoLogSum += Math.log(p + 1e-12); geoCount++;
     for (const b of BANDS) { if (f >= b.lo && f < b.hi) { band[b.key] += p; break; } }
   }
   total = total || 1e-9;
-  const centroid = centroidNum / total;
   const geoMean = Math.exp(geoLogSum / geoCount);
   const arithMean = arithSum / geoCount;
   const flatness = geoMean / (arithMean + 1e-12);  // 0(tonal)..1(noisy)
   const crest = peak / (rms + 1e-9);
-  return { band, total, centroid, flatness, crest };
+  return { band, total, flatness, crest };
 }
 
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
@@ -449,27 +510,29 @@ function updateFingerprint() {
     return;
   }
   const acc = {}; for (const b of BANDS) acc[b.key] = 0;
-  let cTot = 0, cCent = 0, cFlat = 0, cCrest = 0;
+  let cTot = 0, cFlat = 0, cCrest = 0;
   for (const f of _frames) {
     for (const b of BANDS) acc[b.key] += f.band[b.key] / f.total;  // normalized share
-    cCent += f.centroid; cFlat += f.flatness; cCrest += f.crest; cTot++;
+    cFlat += f.flatness; cCrest += f.crest; cTot++;
   }
   for (const b of BANDS) acc[b.key] /= cTot;
-  const centroid = cCent / cTot, flatness = cFlat / cTot, crest = cCrest / cTot;
+  const flatness = cFlat / cTot, crest = cCrest / cTot;
 
-  const lowShare  = acc.low + acc.lowmid;
-  const midShare  = acc.mid + acc.umid;
-  const highShare = acc.pres + acc.air;
-  // brightness: log map 200Hz→0 .. 4kHz→1
-  const bright = clamp01(Math.log2((centroid || 200) / 200) / Math.log2(4000 / 200));
-  // grit: log map of spectral flatness
+  // EQ band shares (5)
+  const low  = acc.sub + acc.punch;
+  const body = acc.body, mid = acc.mid, pres = acc.pres, air = acc.air;
+  // TIGHT: punch share within the lows (more punch vs sub-boom = tighter). ~.35..75 → 0..1
+  const tightRaw = acc.punch / (acc.sub + acc.punch + 1e-9);
+  const tight = clamp01((tightRaw - 0.35) / (0.75 - 0.35));
+  // GRIT: log map of spectral flatness (tonal→0, noisy/distorted→1)
   const grit = clamp01((Math.log10(flatness + 1e-6) + 4) / 3);
-  // sustain: lower crest = more compressed/sustained. crest 1.3→1 .. 4.0→0
+  // SUSTAIN: lower crest = more compressed/sustained. crest 1.3→1 .. 4.0→0
   const sustain = clamp01((4.0 - crest) / (4.0 - 1.3));
 
   _liveFP = {
-    LOW: clamp01(lowShare), MID: clamp01(midShare), HIGH: clamp01(highShare),
-    BRIGHT: bright, GRIT: grit, SUSTAIN: sustain,
+    LOW: clamp01(low), BODY: clamp01(body), MID: clamp01(mid),
+    PRES: clamp01(pres), AIR: clamp01(air),
+    TIGHT: tight, GRIT: grit, SUSTAIN: sustain,
   };
   renderBars();
   renderSuggestions();
@@ -479,7 +542,7 @@ function updateFingerprint() {
 function targetVec() {
   const t = TARGETS[currentTargetKey];
   if (intensity === 1.0) return t.v;
-  const NEUTRAL = { LOW: .33, MID: .33, HIGH: .33, BRIGHT: .5, GRIT: .5, SUSTAIN: .5 };
+  const NEUTRAL = { LOW: .22, BODY: .30, MID: .33, PRES: .12, AIR: .04, TIGHT: .55, GRIT: .5, SUSTAIN: .5 };
   const out = {};
   for (const d of DIMS) {
     const k = d.key;
@@ -524,13 +587,14 @@ function renderSuggestions() {
     const k = d.key;
     const delta = tv[k] - _liveFP[k];           // + → need more
     const mag = Math.abs(delta);
-    if (mag < 0.08) continue;
+    if (mag < 0.06) continue;
     const dir = delta > 0 ? 'up' : 'down';
     const s = SUG[k][dir];
-    items.push({ score: mag * (t.w[k] || 1), dir, title: s.t, how: s.h, pct: Math.round(mag * 100) });
+    const w = (t.emph && t.emph.indexOf(k) >= 0) ? 1.4 : 1.0;
+    items.push({ score: mag * w, dir, title: s.t, how: s.h, pct: Math.round(mag * 100) });
   }
   items.sort((a, b) => b.score - a.score);
-  const top = items.slice(0, 4);
+  const top = items.slice(0, 5);
 
   status.innerHTML = '目標: <b style="color:#00ffaa">' + t.label + '</b>'
     + (intensity > 1 ? ' <span style="color:#ffaa00">(強め)</span>' : '')
@@ -578,7 +642,7 @@ function drawSpectrum() {
 
   // band dividers
   ctx.strokeStyle = '#0a200a'; ctx.lineWidth = 0.5; ctx.font = '8px Courier New'; ctx.fillStyle = '#0d350d';
-  [150, 400, 900, 2000, 5000].forEach(f => { const x = f2x(f); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); });
+  [160, 400, 2000, 5000].forEach(f => { const x = f2x(f); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); });
 
   ctx.beginPath();
   for (let x = 0; x < W; x++) {
