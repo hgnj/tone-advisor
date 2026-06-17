@@ -122,6 +122,18 @@
 
   .snap-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
+  /* Record / Before-After auditioner */
+  .rec-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .rec-status { font-size: 12px; color: #007733; letter-spacing: 1px; }
+  .btn-rec { border-color: #aa3333; color: #ff6666; }
+  .btn-rec:hover { border-color: #ff6666; color: #ff8888; }
+  .btn-rec.active { background: #aa333322; border-color: #ff8888; color: #ff8888; animation: recpulse 1.2s ease-in-out infinite; }
+  @keyframes recpulse { 0%,100% { background:#aa333322 } 50% { background:#aa333355 } }
+  .chip.playing { background: #00ff8820; border-color: #00ffaa; color: #00ffaa; }
+  .chip:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+  .rec-hint { font-size: 10px; color: #005522; line-height: 1.6; margin-top: 6px; }
+  .rec-stale { color: #ffaa00; font-size: 11px; margin-left: 6px; }
+
   footer { padding: 10px 20px; border-top: 1px solid #0d2a0d; background: #050f05; font-size: 11px; color: #005522; line-height: 1.7; letter-spacing: .5px; }
   footer b { color: #008844; }
 </style>
@@ -190,6 +202,22 @@
       <div class="sug-status" id="sugStatus">START を押してギターを弾いてください。</div>
       <div id="sugList"></div>
     </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-label">④ Before / After — 録音して試聴</div>
+    <div class="rec-row">
+      <button class="chip btn-rec" id="recBtn" onclick="toggleRec()">● 録音開始</button>
+      <span class="rec-status" id="recStatus">START 中に録音すると、現在の解析と目標トーンに基づいて "AFTER" を生成します（最大20秒）。</span>
+    </div>
+    <div class="rec-row" id="abRow" style="display:none">
+      <button class="chip" id="playBeforeBtn" onclick="playWhich('before')">▶ BEFORE</button>
+      <button class="chip" id="playAfterBtn" onclick="playWhich('after')">▶ AFTER シミュレーション</button>
+      <button class="chip" id="stopPlayBtn" onclick="stopPlay()">■ 停止</button>
+      <button class="chip" id="regenBtn" onclick="regenerateAfter()" title="目標トーンを変えた後は再生成すると新しい目標が反映されます">♻ AFTER再生成</button>
+      <span id="abInfo" class="rec-status"></span>
+    </div>
+    <div class="rec-hint">※ AFTER は <b>EQ（5バンド）／ローカット（TIGHT）／コンプ（SUSTAIN）</b> による「提案の方向」のシミュレーションです。アンプ／キャブ／IR の入れ替えや、歪み量（GRIT）の変化は再現しません。</div>
   </div>
 </main>
 
@@ -371,6 +399,19 @@ const FRAME_WINDOW = 90;       // ~1.5 s at 60fps
 let _liveFP = null;            // latest computed fingerprint
 let _recompCounter = 0;
 
+// ─── Recording / Before-After state ───
+let mediaRecorder = null;
+let recChunks = [];
+let recTimer = null;
+let recStartMs = 0;
+let beforeBuffer = null;       // AudioBuffer of the raw recording
+let afterBuffer = null;        // AudioBuffer of the simulated "after"
+let afterTargetKey = null;     // target key used when After was rendered (to flag staleness)
+let _playCtx = null;           // dedicated playback ctx so STOP on mic doesn't kill playback
+let _playSrc = null;           // currently playing buffer source
+let _playWhich = null;         // 'before' | 'after' | null
+const REC_MAX_MS = 20000;
+
 const LS_KEY = 'toneAdvisorSettings';
 
 // ─── Audio lifecycle ───
@@ -415,6 +456,9 @@ async function startAudio() {
 }
 
 function stopAudio() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop(); } catch (_) {}
+  }
   if (animId) { cancelAnimationFrame(animId); animId = null; }
   if (stream) stream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close();
@@ -680,6 +724,7 @@ function setTarget(key, fromUser) {
   if (fromUser) intensity = 1.0;
   document.querySelectorAll('#presetChips .chip').forEach(c => c.classList.toggle('active', c.dataset.key === key));
   if (_liveFP) { renderBars(); renderSuggestions(); }
+  if (afterBuffer) updateAbInfo();
   saveSettings();
 }
 
@@ -805,6 +850,197 @@ async function copyForAI() {
       ? '✓ AI用テキストをコピーしました。'
       : 'コピー不可の環境です。⬇ JSON をご利用ください。';
   }
+}
+
+// ─── Record + Before/After auditioner ───
+function getPlayCtx() {
+  if (!_playCtx || _playCtx.state === 'closed') {
+    _playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (_playCtx.state === 'suspended') _playCtx.resume();
+  return _playCtx;
+}
+
+function toggleRec() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') stopRec();
+  else startRec();
+}
+
+function startRec() {
+  if (!isRunning || !stream) {
+    setRecStatus('まず START を押して入力を有効にしてください。', true);
+    return;
+  }
+  if (typeof MediaRecorder === 'undefined') {
+    setRecStatus('このブラウザは録音(MediaRecorder)に対応していません。', true);
+    return;
+  }
+  stopPlay();
+  recChunks = [];
+  try {
+    mediaRecorder = new MediaRecorder(stream);
+  } catch (e) {
+    setRecStatus('録音を開始できませんでした: ' + (e.message || e.name), true);
+    return;
+  }
+  mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
+  mediaRecorder.onstop = onRecStopped;
+  mediaRecorder.start();
+  recStartMs = performance.now();
+
+  const btn = document.getElementById('recBtn');
+  btn.classList.add('active');
+  btn.textContent = '■ 録音停止';
+  setRecStatus('録音中… 00.0 / ' + (REC_MAX_MS/1000).toFixed(0) + 's');
+
+  // live timer + safety auto-stop
+  recTimer = setInterval(() => {
+    const elapsed = performance.now() - recStartMs;
+    if (elapsed >= REC_MAX_MS) { stopRec(); return; }
+    setRecStatus('録音中… ' + (elapsed/1000).toFixed(1) + ' / ' + (REC_MAX_MS/1000).toFixed(0) + 's');
+  }, 100);
+}
+
+function stopRec() {
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop(); } catch (_) {}
+  }
+  const btn = document.getElementById('recBtn');
+  btn.classList.remove('active');
+  btn.textContent = '● 録音開始';
+}
+
+async function onRecStopped() {
+  setRecStatus('解析中…');
+  try {
+    if (!recChunks.length) throw new Error('録音データが空です。');
+    const blob = new Blob(recChunks, { type: recChunks[0].type || 'audio/webm' });
+    const ab = await blob.arrayBuffer();
+    const ctx = getPlayCtx();
+    beforeBuffer = await ctx.decodeAudioData(ab.slice(0));
+    afterBuffer = await renderAfter(beforeBuffer);
+    afterTargetKey = currentTargetKey;
+    document.getElementById('abRow').style.display = '';
+    updateAbInfo();
+    setRecStatus('録音 ' + beforeBuffer.duration.toFixed(1) + 's を生成しました。BEFORE / AFTER を再生して比較できます。');
+  } catch (e) {
+    setRecStatus('録音の処理に失敗しました: ' + (e.message || e.name), true);
+  }
+}
+
+function setRecStatus(msg, isErr) {
+  const el = document.getElementById('recStatus');
+  el.textContent = msg;
+  el.style.color = isErr ? '#ff8866' : '#007733';
+}
+
+function updateAbInfo() {
+  const info = document.getElementById('abInfo');
+  const stale = afterTargetKey && afterTargetKey !== currentTargetKey;
+  info.innerHTML = stale
+    ? '<span class="rec-stale">⚠ 目標が変わりました — AFTER は「' + TARGETS[afterTargetKey].label + '」基準。「♻ AFTER再生成」で更新できます。</span>'
+    : '';
+}
+
+async function regenerateAfter() {
+  if (!beforeBuffer) return;
+  setRecStatus('AFTER を再生成中…');
+  try {
+    stopPlay();
+    afterBuffer = await renderAfter(beforeBuffer);
+    afterTargetKey = currentTargetKey;
+    updateAbInfo();
+    setRecStatus('AFTER を「' + TARGETS[currentTargetKey].label + '」基準で再生成しました。');
+  } catch (e) {
+    setRecStatus('再生成に失敗しました: ' + (e.message || e.name), true);
+  }
+}
+
+// Build the offline DSP chain: 5-band EQ (LOW/BODY/MID/PRES/AIR),
+// high-pass shift (TIGHT), and a compressor when SUSTAIN needs to rise.
+async function renderAfter(buf) {
+  const fp = _liveFP || { LOW: .25, BODY: .3, MID: .3, PRES: .12, AIR: .04, TIGHT: .55, GRIT: .5, SUSTAIN: .5 };
+  const tv = targetVec();
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const off = new OAC(buf.numberOfChannels, buf.length, buf.sampleRate);
+  const src = off.createBufferSource();
+  src.buffer = buf;
+
+  // delta(target − current) → dB. +/-9 dB cap keeps it audible without destroying signal.
+  const toDb = d => Math.max(-9, Math.min(9, d * 18));
+  const bands = [
+    { dim: 'LOW',  type: 'lowshelf',  freq: 120 },
+    { dim: 'BODY', type: 'peaking',   freq: 250,  Q: 1.0 },
+    { dim: 'MID',  type: 'peaking',   freq: 1000, Q: 1.0 },
+    { dim: 'PRES', type: 'peaking',   freq: 3000, Q: 1.3 },
+    { dim: 'AIR',  type: 'highshelf', freq: 6000 },
+  ];
+
+  let node = src;
+  bands.forEach(b => {
+    const f = off.createBiquadFilter();
+    f.type = b.type;
+    f.frequency.value = b.freq;
+    if (b.Q !== undefined) f.Q.value = b.Q;
+    f.gain.value = toDb(tv[b.dim] - fp[b.dim]);
+    node.connect(f); node = f;
+  });
+
+  // TIGHT: raise the HPF cutoff when we need it tighter.
+  const tightDelta = tv.TIGHT - fp.TIGHT;
+  const hp = off.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 45 + Math.max(0, tightDelta) * 90;  // 45–135 Hz
+  hp.Q.value = 0.7;
+  node.connect(hp); node = hp;
+
+  // SUSTAIN: add compression when target wants more sustain than current.
+  const sustDelta = tv.SUSTAIN - fp.SUSTAIN;
+  let makeup = 1.0;
+  if (sustDelta > 0.1) {
+    const comp = off.createDynamicsCompressor();
+    comp.threshold.value = -24 - sustDelta * 8;            // -24 to -32 dB
+    comp.ratio.value = Math.min(12, 3 + sustDelta * 8);    // 3 to ~12
+    comp.attack.value = 0.005;
+    comp.release.value = 0.18;
+    comp.knee.value = 6;
+    node.connect(comp); node = comp;
+    makeup = 1.0 + Math.min(0.7, sustDelta * 1.2);          // small make-up gain
+  }
+
+  const out = off.createGain();
+  out.gain.value = makeup;
+  node.connect(out); out.connect(off.destination);
+
+  src.start();
+  return off.startRendering();
+}
+
+function playWhich(which) {
+  const buf = which === 'before' ? beforeBuffer : afterBuffer;
+  if (!buf) return;
+  stopPlay();
+  const ctx = getPlayCtx();
+  const s = ctx.createBufferSource();
+  s.buffer = buf;
+  s.connect(ctx.destination);
+  s.onended = () => { if (_playWhich === which) clearPlayUI(); };
+  s.start();
+  _playSrc = s; _playWhich = which;
+  document.getElementById('playBeforeBtn').classList.toggle('playing', which === 'before');
+  document.getElementById('playAfterBtn').classList.toggle('playing', which === 'after');
+}
+
+function stopPlay() {
+  if (_playSrc) { try { _playSrc.stop(); } catch (_) {} _playSrc.disconnect(); }
+  clearPlayUI();
+}
+
+function clearPlayUI() {
+  _playSrc = null; _playWhich = null;
+  document.getElementById('playBeforeBtn').classList.remove('playing');
+  document.getElementById('playAfterBtn').classList.remove('playing');
 }
 
 // ─── Settings ───
