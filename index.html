@@ -94,8 +94,9 @@
 
   /* Fingerprint bars */
   .dim { margin-bottom: 13px; }
-  .dim-head { display: flex; justify-content: space-between; font-size: 11px; color: #008844; margin-bottom: 4px; letter-spacing: 1px; }
-  .dim-head .gap { font-size: 10px; }
+  .dim-head { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #008844; margin-bottom: 4px; letter-spacing: 1px; flex-wrap: wrap; }
+  .dim-head .gap { font-size: 10px; white-space: nowrap; }
+  .dim-head .nums { color: #007733; }
   .track {
     position: relative; height: 14px; background: #0a1a0a;
     border: 1px solid #0d2a0d; border-radius: 2px; overflow: visible;
@@ -173,11 +174,14 @@
         <span class="t-cur">▌現在</span>
         <span class="t-tgt">┊目標</span>
         <span class="t-base">⋮基準(保存時)</span>
+        <span>数値は 0–100 の相対指標</span>
       </div>
       <canvas id="specCanvas"></canvas>
       <div class="snap-row">
         <button class="chip" id="snapBtn" onclick="saveBaseline()">📸 今の音を基準に保存</button>
         <button class="chip" id="snapClr" onclick="clearBaseline()" style="display:none">基準クリア</button>
+        <button class="chip" onclick="copyForAI()" title="解析数値＋スキーマ説明＋プロンプトを生成AIに貼れる形でコピー">📋 AI用にコピー</button>
+        <button class="chip" onclick="exportJSON()" title="解析数値群を JSON で保存">⬇ JSON</button>
       </div>
     </div>
 
@@ -563,9 +567,11 @@ function renderBars() {
     const aGap = Math.abs(gap);
     const col = aGap < .07 ? '#00ffaa' : aGap < .15 ? '#ffaa00' : '#ff5500';
     const gapTxt = aGap < .07 ? 'OK' : (gap > 0 ? '+' : '−') + Math.round(aGap * 100);
+    const curPct = Math.round(cur * 100), tgtPct = Math.round(tgt * 100);
     const baseMark = baseline ? '<div class="base" style="left:' + (baseline[k] * 100).toFixed(1) + '%"></div>' : '';
     return '<div class="dim">'
-      + '<div class="dim-head"><span>' + d.name + '</span><span class="gap" style="color:' + col + '">' + gapTxt + '</span></div>'
+      + '<div class="dim-head"><span>' + d.name + '</span>'
+      +   '<span class="gap"><span class="nums">現在 ' + curPct + ' ／ 目標 ' + tgtPct + '</span> <b style="color:' + col + '">' + gapTxt + '</b></span></div>'
       + '<div class="track">'
       +   '<div class="fill" style="width:' + (cur * 100).toFixed(1) + '%;border-right-color:' + col + ';background:' + col + '22"></div>'
       +   '<div class="target" style="left:' + (tgt * 100).toFixed(1) + '%"></div>'
@@ -703,6 +709,102 @@ function clearBaseline() {
   baseline = null;
   document.getElementById('snapClr').style.display = 'none';
   renderBars();
+}
+
+// ─── Export: numeric data for archiving / feeding a generative AI ───
+function buildReport() {
+  if (!_liveFP) return null;
+  const t = TARGETS[currentTargetKey];
+  const tv = targetVec();
+  const axes = DIMS.map(d => {
+    const k = d.key, cur = _liveFP[k], tgt = tv[k];
+    const o = {
+      key: k, name: d.name,
+      current: +cur.toFixed(3), target: +tgt.toFixed(3), delta: +(cur - tgt).toFixed(3),
+      current_0to100: Math.round(cur * 100), target_0to100: Math.round(tgt * 100)
+    };
+    if (baseline) o.baseline_0to100 = Math.round(baseline[k] * 100);
+    return o;
+  });
+  // suggestions (same ranking as the on-screen advice)
+  const items = [];
+  for (const d of DIMS) {
+    const k = d.key, delta = tv[k] - _liveFP[k], mag = Math.abs(delta);
+    if (mag < 0.06) continue;
+    const dir = delta > 0 ? 'up' : 'down', s = SUG[k][dir];
+    const w = (t.emph && t.emph.indexOf(k) >= 0) ? 1.4 : 1.0;
+    items.push({ axis: k, direction: dir, title: s.t, how: s.h, gap_0to100: Math.round(mag * 100), score: +(mag * w).toFixed(3) });
+  }
+  items.sort((a, b) => b.score - a.score);
+  return {
+    app: 'tone-advisor', schema_version: 1,
+    timestamp: new Date().toISOString(),
+    note: '値は 0–1（出力では0–100換算）の相対指標。LOW/BODY/MID/PRES/AIR は全体スペクトルに対するエネルギー比、TIGHT は低域の締まり、GRIT は歪み量(スペクトル平坦度)、SUSTAIN は伸び/圧縮(クレストファクタ)。マイク/IR/部屋で絶対値はぶれるため、目標との差分で読むこと。',
+    rig: '7弦標準チューニング / Line6 HX Stomp + IR / EMG(アクティブ)PU',
+    target: { key: currentTargetKey, label: t.label, intensity: intensity },
+    axes: axes,
+    suggestions: items.slice(0, 8),
+    tips: t.tips || []
+  };
+}
+
+function buildAIText() {
+  const r = buildReport();
+  if (!r) return null;
+  let s = '# ギター・トーン解析結果（tone-advisor）\n\n';
+  s += '- 解析日時: ' + r.timestamp + '\n';
+  s += '- リグ: ' + r.rig + '\n';
+  s += '- 目標トーン: ' + r.target.label + (r.target.intensity > 1 ? '（強め）' : '') + '\n';
+  s += '- 補足: ' + r.note + '\n\n';
+  s += '## 各軸の数値（0–100換算）\n';
+  s += '| 軸 | 現在 | 目標 | 差 |' + (r.axes[0].baseline_0to100 !== undefined ? ' 基準 |' : '') + '\n';
+  s += '|---|---|---|---|' + (r.axes[0].baseline_0to100 !== undefined ? '---|' : '') + '\n';
+  r.axes.forEach(a => {
+    s += '| ' + a.name + ' | ' + a.current_0to100 + ' | ' + a.target_0to100 + ' | ' + (a.delta >= 0 ? '+' : '') + Math.round(a.delta * 100) + ' |';
+    if (a.baseline_0to100 !== undefined) s += ' ' + a.baseline_0to100 + ' |';
+    s += '\n';
+  });
+  s += '\n## 現在のヒューリスティック提案（参考）\n';
+  if (!r.suggestions.length) s += '- 目標に近く、大きなズレなし\n';
+  r.suggestions.forEach(it => { s += '- [' + (it.direction === 'up' ? '上げる' : '下げる') + '] ' + it.title + ' → ' + it.how + '\n'; });
+  r.tips.forEach(tp => s += '- 💡 ' + tp + '\n');
+  s += '\n## お願い\n';
+  s += 'あなたは経験豊富なギターのトーンエンジニアです。上記は私のギター音の周波数解析結果と、目標トーン「' + r.target.label + '」との差分です。'
+     + 'Line6 HX Stomp（アンプ/キャブ・IR・EQ・ブースター・コンプ等）でこの目標に近づけるための具体策を、優先順位をつけて提案してください。'
+     + '各アクションは「どのブロック／パラメータを、どの帯域で、どの方向にどれくらい」まで具体的に。EMG はホットなのでゲインの入れ過ぎに注意してください。\n';
+  return s;
+}
+
+function exportJSON() {
+  const r = buildReport();
+  if (!r) { document.getElementById('sugStatus').textContent = 'まず弾いて解析させてからダウンロードしてください。'; return; }
+  const blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'tone-advisor_' + r.target.key + '_' + r.timestamp.replace(/[:.]/g, '-') + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  document.getElementById('sugStatus').textContent = '✓ JSON をダウンロードしました。';
+}
+
+async function copyForAI() {
+  const txt = buildAIText();
+  if (!txt) { document.getElementById('sugStatus').textContent = 'まず弾いて解析させてからコピーしてください。'; return; }
+  try {
+    await navigator.clipboard.writeText(txt);
+    document.getElementById('sugStatus').textContent = '✓ AI用テキストをコピーしました。ChatGPT / Claude 等に貼り付けてください。';
+  } catch (e) {
+    // file:// や非対応環境向けフォールバック
+    const ta = document.createElement('textarea');
+    ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
+    ta.remove();
+    document.getElementById('sugStatus').textContent = ok
+      ? '✓ AI用テキストをコピーしました。'
+      : 'コピー不可の環境です。⬇ JSON をご利用ください。';
+  }
 }
 
 // ─── Settings ───
