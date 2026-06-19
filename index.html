@@ -410,7 +410,10 @@ let afterTargetKey = null;     // target key used when After was rendered (to fl
 let _playCtx = null;           // dedicated playback ctx so STOP on mic doesn't kill playback
 let _playSrc = null;           // currently playing buffer source
 let _playWhich = null;         // 'before' | 'after' | null
+let beforeGain = 1, afterGain = 1;  // loudness-match gains so A/B is a fair tone comparison
 const REC_MAX_MS = 20000;
+const _AB_TARGET_RMS = 0.18;   // common playback loudness for BEFORE/AFTER
+const _AB_MAX_GAIN = 8;        // don't blow up a very quiet take's noise
 
 const LS_KEY = 'toneAdvisorSettings';
 
@@ -921,12 +924,36 @@ async function onRecStopped() {
     beforeBuffer = await ctx.decodeAudioData(ab.slice(0));
     afterBuffer = await renderAfter(beforeBuffer);
     afterTargetKey = currentTargetKey;
+    recomputePlayGains();
     document.getElementById('abRow').style.display = '';
     updateAbInfo();
     setRecStatus('録音 ' + beforeBuffer.duration.toFixed(1) + 's を生成しました。BEFORE / AFTER を再生して比較できます。');
   } catch (e) {
     setRecStatus('録音の処理に失敗しました: ' + (e.message || e.name), true);
   }
+}
+
+// Loudness match: normalize BEFORE and AFTER to the same RMS so the A/B
+// comparison reflects tone, not level. Peak-limited so neither clips.
+function bufStats(buf) {
+  let sumSq = 0, peak = 0, n = 0;
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < d.length; i++) { const v = d[i]; sumSq += v * v; const a = Math.abs(v); if (a > peak) peak = a; }
+    n += d.length;
+  }
+  return { rms: n ? Math.sqrt(sumSq / n) : 0, peak: peak };
+}
+function playGainFor(buf) {
+  const { rms, peak } = bufStats(buf);
+  if (rms <= 1e-6) return 1;
+  let g = Math.min(_AB_TARGET_RMS / rms, _AB_MAX_GAIN);
+  if (peak > 0) g = Math.min(g, 0.99 / peak);   // headroom: never clip
+  return g;
+}
+function recomputePlayGains() {
+  beforeGain = beforeBuffer ? playGainFor(beforeBuffer) : 1;
+  afterGain  = afterBuffer  ? playGainFor(afterBuffer)  : 1;
 }
 
 function setRecStatus(msg, isErr) {
@@ -950,6 +977,7 @@ async function regenerateAfter() {
     stopPlay();
     afterBuffer = await renderAfter(beforeBuffer);
     afterTargetKey = currentTargetKey;
+    recomputePlayGains();
     updateAbInfo();
     setRecStatus('AFTER を「' + TARGETS[currentTargetKey].label + '」基準で再生成しました。');
   } catch (e) {
@@ -1024,7 +1052,10 @@ function playWhich(which) {
   const ctx = getPlayCtx();
   const s = ctx.createBufferSource();
   s.buffer = buf;
-  s.connect(ctx.destination);
+  // Loudness-matched gain so BEFORE/AFTER play at the same level (fair A/B).
+  const g = ctx.createGain();
+  g.gain.value = which === 'before' ? beforeGain : afterGain;
+  s.connect(g); g.connect(ctx.destination);
   s.onended = () => { if (_playWhich === which) clearPlayUI(); };
   s.start();
   _playSrc = s; _playWhich = which;
